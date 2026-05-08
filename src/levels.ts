@@ -13,6 +13,14 @@ export interface Level {
   maxEcc: number;
 }
 
+/**
+ * NOTE on scale: these are GAME planets, not realistic ones. Physics is
+ * Newtonian and self-consistent, but radii are 1/30–1/100 of real bodies so
+ * launches reach orbit in roughly 60–90 seconds of play time instead of
+ * thousands of seconds. The orbital-mechanics intuition (apoapsis/periapsis,
+ * gravity turns, circularization burns) all still applies.
+ */
+
 function rocketAtSurface(planet: Planet, overrides: Partial<Rocket>): Rocket {
   const surface = { x: 0, y: planet.radius + 1 };
   return {
@@ -33,11 +41,15 @@ function rocketAtSurface(planet: Planet, overrides: Partial<Rocket>): Rocket {
   };
 }
 
-// --- HOP: tiny moon, no atmosphere, scout rocket ---
+// --- HOP: tiny rocky body, no atmosphere ---
+// radius 60 km, surface g ≈ 1.5 m/s², circular orbit ~300 m/s.
+// Target a 5 km circular orbit. Reachable in ~60-80 seconds at full burn.
 export const HOP: Level = (() => {
+  const radius = 60_000;
+  const g = 1.5;
   const planet: Planet = {
-    mu: 4.9e12,
-    radius: 1_737_000,
+    mu: g * radius * radius, // 5.4e9
+    radius,
     atmoScaleHeight: 0,
     atmoSeaLevelDensity: 0,
     atmoTop: 0,
@@ -45,76 +57,84 @@ export const HOP: Level = (() => {
   return {
     id: "hop",
     name: "HOP",
-    blurb: "Tiny moon. No air. Light gravity. Reach a 20 km orbit.",
+    blurb: "Tiny rocky body. No atmosphere. Reach a 5 km orbit.",
     planet,
     rocket: rocketAtSurface(planet, {
       mass: 4_000,
       dryMass: 1_400,
-      thrust: 14_000,
+      // Surface weight ≈ 6 kN, TWR ≈ 2.7. Snappy launch.
+      thrust: 16_000,
       isp: 320,
       area: 2,
       cd: 0.3,
       shape: "scout",
     }),
-    minPeriAlt: 20_000,
-    maxEcc: 0.2,
+    minPeriAlt: 5_000,
+    maxEcc: 0.25,
   };
 })();
 
-// --- ASCENT: Earth-like body with atmosphere, lifter rocket ---
+// --- ASCENT: Earth-flavor with a real atmosphere to push through ---
+// radius 200 km, g ≈ 4.5 m/s², atmo top 25 km. Target 25 km orbit.
 export const ASCENT: Level = (() => {
+  const radius = 200_000;
+  const g = 4.5;
   const planet: Planet = {
-    mu: 3.986e14,
-    radius: 6_371_000,
-    atmoScaleHeight: 8_500,
-    atmoSeaLevelDensity: 1.225,
-    atmoTop: 100_000,
+    mu: g * radius * radius, // 1.8e11
+    radius,
+    atmoScaleHeight: 4_000,
+    atmoSeaLevelDensity: 1.2,
+    atmoTop: 25_000,
   };
-  // TWR ~1.4 at surface; mass ratio ~3.5 for ~3.7 km/s ΔV
   return {
     id: "ascent",
     name: "ASCENT",
-    blurb: "Earth-like world. Atmosphere fights you. Pitch over above 5 km.",
+    blurb: "Atmosphere fights you. Pitch over above 3 km.",
     planet,
     rocket: rocketAtSurface(planet, {
-      mass: 350_000,
-      dryMass: 100_000,
-      thrust: 4_900_000,
+      mass: 80_000,
+      dryMass: 22_000,
+      // Surface weight = 360 kN, TWR ≈ 1.6.
+      thrust: 580_000,
       isp: 320,
-      area: 12,
+      area: 6,
       cd: 0.3,
       shape: "lifter",
     }),
-    minPeriAlt: 130_000,
-    maxEcc: 0.15,
+    minPeriAlt: 25_000,
+    maxEcc: 0.18,
   };
 })();
 
 // --- HEAVY: dense world, beefier rocket ---
+// radius 300 km, g ≈ 7, atmo top 35 km. Target 50 km orbit.
 export const HEAVY_LIFT: Level = (() => {
+  const radius = 300_000;
+  const g = 7;
   const planet: Planet = {
-    mu: 6.0e14, // about 1.5x Earth gravity
-    radius: 6_800_000,
-    atmoScaleHeight: 9_000,
+    mu: g * radius * radius, // 6.3e11
+    radius,
+    atmoScaleHeight: 5_000,
     atmoSeaLevelDensity: 1.6,
-    atmoTop: 110_000,
+    atmoTop: 35_000,
   };
   return {
     id: "heavy",
     name: "HEAVY",
-    blurb: "Heavy world. Dense air. Three cores, brute force.",
+    blurb: "Heavy world, dense air. Three cores, brute force.",
     planet,
     rocket: rocketAtSurface(planet, {
-      mass: 1_200_000,
-      dryMass: 320_000,
-      thrust: 22_000_000,
+      mass: 220_000,
+      dryMass: 60_000,
+      // Surface weight = 1.54 MN, TWR ≈ 1.5.
+      thrust: 2_300_000,
       isp: 330,
-      area: 30,
+      area: 12,
       cd: 0.32,
       shape: "heavy",
     }),
-    minPeriAlt: 150_000,
-    maxEcc: 0.18,
+    minPeriAlt: 50_000,
+    maxEcc: 0.2,
   };
 })();
 

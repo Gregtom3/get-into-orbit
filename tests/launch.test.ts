@@ -29,7 +29,7 @@ describe("HOP level: scripted launch reaches orbit", () => {
     const planet = HOP.planet;
 
     const dt = 0.05;
-    const maxTime = 1500; // s
+    const maxTime = 300; // s — game pacing target
     let t = 0;
 
     while (t < maxTime) {
@@ -39,31 +39,27 @@ describe("HOP level: scripted launch reaches orbit", () => {
       // Express heading as pitch from local vertical (radial). 0 = straight up,
       // π/2 = locally horizontal (prograde tangent to surface).
       // Convert pitch -> world heading using current radial direction.
-      const radialAngle = Math.atan2(rocket.pos.y, rocket.pos.x); // direction of "up"
+      const radialAngle = Math.atan2(rocket.pos.y, rocket.pos.x);
       let pitchFromVertical: number;
-      if (alt < 2_000) pitchFromVertical = 0;
-      else if (alt < 25_000) {
-        const f = (alt - 2_000) / 23_000;
+      // Scaled gravity turn for the 60 km HOP planet.
+      if (alt < 800) pitchFromVertical = 0;
+      else if (alt < 6_000) {
+        const f = (alt - 800) / 5_200;
         pitchFromVertical = f * (Math.PI / 2);
       } else pitchFromVertical = Math.PI / 2;
-      // Tilt eastward (counter-clockwise around planet center).
       rocket.heading = radialAngle - pitchFromVertical;
 
       const el = elements(rocket.pos, rocket.vel, planet);
       const apoAlt = el.apoapsis - planet.radius;
       const periAlt = el.periapsis - planet.radius;
-      const targetApo = HOP.minPeriAlt + 2_000;
+      const targetApo = HOP.minPeriAlt + 500;
 
-      // Stage 1: build apoapsis to target. (Also covers initial rest, where
-      // h≈0 makes elements degenerate — just burn until we have an apo.)
-      // Stage 2: coast to apoapsis.
-      // Stage 3: circularize at apoapsis (raise periapsis).
       const haveApo = el.e < 1 && apoAlt < targetApo;
       const notBoundYet = el.e >= 1;
       if (notBoundYet || haveApo) {
         rocket.throttle = 1;
       } else if (periAlt < HOP.minPeriAlt) {
-        const nearApo = Math.abs(r - el.apoapsis) < 1_500;
+        const nearApo = Math.abs(r - el.apoapsis) < 400;
         rocket.throttle = nearApo ? 1 : 0;
       } else {
         rocket.throttle = 0;
@@ -87,5 +83,7 @@ describe("HOP level: scripted launch reaches orbit", () => {
     expect(el.e).toBeLessThan(1); // bound
     expect(el.periapsis - planet.radius).toBeGreaterThan(HOP.minPeriAlt);
     expect(rocket.mass).toBeGreaterThan(rocket.dryMass); // didn't run dry
+    // Game pacing: a competent flight reaches orbit in under 3 minutes.
+    expect(rocket.t).toBeLessThan(180);
   }, 10_000);
 });
