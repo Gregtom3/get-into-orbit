@@ -16,7 +16,7 @@ import {
   type Camera,
 } from "./render";
 import { Input } from "./input";
-import { drawHud, drawPills, hudDataOf, type HudData } from "./hud";
+import { drawHud, drawPills, drawTutorialBanner, hudDataOf, type HudData } from "./hud";
 import { len } from "./vec2";
 import { slewHeading, targetHeading } from "./autopilot";
 import { Menu } from "./menu";
@@ -27,12 +27,13 @@ import { settings } from "./settings";
 import { applyController, makeController, panByPixels, recenter, zoomBy } from "./camera";
 import { HelpOverlay } from "./help";
 import { applyTuning, SetupScreen } from "./setup";
+import { Tutorial } from "./tutorial";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const params = readParams();
 
-let cam: Camera = { center: { x: 0, y: 0 }, metersPerPx: 5000, vw: 0, vh: 0 };
+let cam: Camera = { center: { x: 0, y: 0 }, metersPerPx: 5000, vw: 0, vh: 0, rotation: 0 };
 let smoothMpp = 5000;
 let dpr = 1;
 
@@ -40,6 +41,7 @@ const input = new Input(canvas);
 const menu = new Menu();
 const setup = new SetupScreen();
 const help = new HelpOverlay();
+const tutorial = new Tutorial();
 const cameraCtrl = makeController();
 
 input.onCamera = (intent) => {
@@ -176,6 +178,8 @@ function startLevel(id: string, useSetupTuning = false) {
   recenter(cameraCtrl);
   fitCamera(cam, rocket, planet);
   smoothMpp = cam.metersPerPx;
+  // Auto-start tutorial only the first time the player ever launches.
+  tutorial.maybeStart();
   scene = "play";
 }
 
@@ -211,7 +215,11 @@ function frame(now: number) {
 
 function update(dtReal: number) {
   const edges = input.consumeEdges();
-  if (edges.help) help.toggle();
+  if (edges.help) {
+    // Tap ? to (re)start the tutorial as well as toggle the help overlay.
+    if (!tutorial.active) tutorial.start();
+    else help.toggle();
+  }
   if (edges.recenter) recenter(cameraCtrl);
   if (edges.followToggle) cameraCtrl.follow = !cameraCtrl.follow;
   if (edges.quit) {
@@ -260,6 +268,7 @@ function update(dtReal: number) {
           status = "WIN";
           silence();
           sfx.win();
+          tutorial.win();
           recordScore(level.id, {
             seconds: rocket.t,
             fuelFrac: Math.max(0, (rocket.mass - rocket.dryMass) / Math.max(initialFuel, 1)),
@@ -273,6 +282,16 @@ function update(dtReal: number) {
     } else {
       winHoldTime = 0;
     }
+
+    // Tutorial advance (uses live game state)
+    const elNow = elements(rocket.pos, rocket.vel, planet);
+    tutorial.tick({
+      rocket,
+      el: elNow,
+      altAbove: altitudeAbove(planet),
+      input: input.state,
+      level: { minPeriAlt: level.minPeriAlt, maxEcc: level.maxEcc },
+    });
   } else {
     silence();
   }
@@ -319,6 +338,7 @@ function draw() {
   const data: HudData = hudDataOf(rocket, el, planet, fuelFrac, status, hint());
   drawHud(ctx, cam.vw, data);
   drawPills(ctx, input, cameraCtrl);
+  drawTutorialBanner(ctx, cam.vw, input, tutorial);
 
   const best = bestScore(level.id);
   if (best) {
@@ -349,6 +369,7 @@ function drawMenuPlanet() {
     metersPerPx: 1,
     vw: cam.vw,
     vh: cam.vh,
+    rotation: 0,
   };
   // Pretend the planet has a fixed 120-pixel radius regardless of size.
   const fakePlanet: Planet = {

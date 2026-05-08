@@ -11,6 +11,12 @@ export interface Camera {
   /** Viewport size in CSS pixels. */
   vw: number;
   vh: number;
+  /**
+   * World-frame rotation that maps to screen up. With `rotation = atan2(pos.y, pos.x) - π/2`
+   * the radial-outward direction at `pos` aligns with screen up — the "rocket-up" view.
+   * 0 means world +y is screen up.
+   */
+  rotation: number;
 }
 
 export const COLOR = {
@@ -28,9 +34,16 @@ export const COLOR = {
 } as const;
 
 export function worldToScreen(p: Vec2, cam: Camera): Vec2 {
+  const dx = p.x - cam.center.x;
+  const dy = p.y - cam.center.y;
+  // Rotate the world by -rotation so the +rotation axis maps to screen up.
+  const c = Math.cos(-cam.rotation);
+  const s = Math.sin(-cam.rotation);
+  const rx = dx * c - dy * s;
+  const ry = dx * s + dy * c;
   return {
-    x: cam.vw / 2 + (p.x - cam.center.x) / cam.metersPerPx,
-    y: cam.vh / 2 - (p.y - cam.center.y) / cam.metersPerPx,
+    x: cam.vw / 2 + rx / cam.metersPerPx,
+    y: cam.vh / 2 - ry / cam.metersPerPx,
   };
 }
 
@@ -53,8 +66,20 @@ export function drawPlanet(
   const rPx = planet.radius / cam.metersPerPx;
   if (rPx < 1) return;
 
-  // Atmosphere ring
+  // Atmosphere as concentric rings of decreasing alpha to suggest density.
   if (planet.atmoTop > 0) {
+    const layers = 6;
+    for (let i = layers; i >= 1; i--) {
+      const altFrac = i / layers;
+      const ringR = (planet.radius + planet.atmoTop * altFrac) / cam.metersPerPx;
+      const alpha = (1 - altFrac) * 0.22;
+      ctx.strokeStyle = `rgba(125,200,225,${alpha.toFixed(3)})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Top-of-atmosphere line, dashed
     const atmoPx = (planet.radius + planet.atmoTop) / cam.metersPerPx;
     ctx.strokeStyle = COLOR.atmo;
     ctx.lineWidth = 1;
@@ -160,40 +185,68 @@ export function drawRocket(
 ) {
   const shape: RocketShape = SHAPES[rocket.shape ?? "scout"];
   const p = worldToScreen(rocket.pos, cam);
-  // Minimum on-screen rocket size: never less than 18px half-extent so the
-  // rocket is always visible regardless of zoom level.
-  const size = 18;
+  // Bigger rocket so it actually reads as the player's avatar.
+  const size = 26;
   const scale = size / shape.extent;
   ctx.save();
   ctx.translate(p.x, p.y);
-  // Canvas y grows downward; world heading π/2 = "up". Convert.
-  ctx.rotate(-rocket.heading + Math.PI / 2);
+  // Screen-space rocket rotation. The world heading must be re-expressed in
+  // the camera's rotated frame (which has already rotated the world by
+  // -cam.rotation). Canvas y is flipped, so add π/2.
+  const screenHeading = rocket.heading - cam.rotation;
+  ctx.rotate(-screenHeading + Math.PI / 2);
 
-  // Flame
+  // Anchor: the rocket's "world position" should be its engine bell rather
+  // than its visual center. Shift everything up so the flame origin in shape
+  // coords sits at (0, 0) in our local frame — i.e. at the world position.
+  ctx.translate(0, -shape.flameOrigin[1] * scale);
+
+  // Flame: throttle-driven length, hot inner core, jittery outer flames.
   if (rocket.throttle > 0 && !rocket.crashed) {
-    ctx.strokeStyle = COLOR.flame;
-    ctx.lineWidth = 1.5;
     const fox = shape.flameOrigin[0] * scale;
     const foy = shape.flameOrigin[1] * scale;
     const fhw = shape.flameHalfWidth * scale;
-    const flameLen = scale * 1.4 * rocket.throttle * (0.8 + Math.random() * 0.4);
+    const t = rocket.throttle;
+    const baseLen = scale * (1.2 + 2.8 * t);
+    const jitter = 0.85 + Math.random() * 0.3;
+    const flameLen = baseLen * jitter;
+
+    // Outer flame body — wide, orange
+    ctx.fillStyle = "rgba(255,140,60,0.55)";
     ctx.beginPath();
-    ctx.moveTo(fox - fhw, foy);
-    ctx.lineTo(fox, foy + flameLen);
-    ctx.lineTo(fox + fhw, foy);
-    ctx.stroke();
-    // inner flicker
-    ctx.strokeStyle = "rgba(255,200,120,0.7)";
+    ctx.moveTo(fox - fhw * 1.1, foy);
+    ctx.quadraticCurveTo(fox, foy + flameLen * 1.05, fox + fhw * 1.1, foy);
+    ctx.lineTo(fox - fhw * 1.1, foy);
+    ctx.fill();
+
+    // Mid flame — yellow
+    ctx.fillStyle = "rgba(255,210,90,0.85)";
     ctx.beginPath();
-    ctx.moveTo(fox - fhw * 0.5, foy);
-    ctx.lineTo(fox, foy + flameLen * 0.7);
-    ctx.lineTo(fox + fhw * 0.5, foy);
-    ctx.stroke();
+    ctx.moveTo(fox - fhw * 0.7, foy);
+    ctx.quadraticCurveTo(fox, foy + flameLen * 0.85, fox + fhw * 0.7, foy);
+    ctx.lineTo(fox - fhw * 0.7, foy);
+    ctx.fill();
+
+    // Inner core — white-hot
+    ctx.fillStyle = "rgba(255,255,230,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(fox - fhw * 0.35, foy);
+    ctx.quadraticCurveTo(fox, foy + flameLen * 0.6, fox + fhw * 0.35, foy);
+    ctx.lineTo(fox - fhw * 0.35, foy);
+    ctx.fill();
+
+    // Spark trail — couple of stray dots below the engine
+    ctx.fillStyle = "rgba(255,180,80,0.6)";
+    for (let i = 0; i < 3; i++) {
+      const sx = fox + (Math.random() - 0.5) * fhw * 1.6;
+      const sy = foy + flameLen * (1 + Math.random() * 0.4);
+      ctx.fillRect(sx, sy, 2, 2);
+    }
   }
 
   // Body
   ctx.strokeStyle = rocket.crashed ? COLOR.warn : COLOR.rocket;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2;
   for (const poly of shape.lines) {
     ctx.beginPath();
     const p0 = poly[0]!;
@@ -319,12 +372,9 @@ export function drawStars(
 }
 
 /**
- * Choose a metersPerPx and center so the rocket is ALWAYS on screen plus a
- * chunk of surface beneath it.
- *
- * Strategy: the visible span scales with altitude (close in low, wide high).
- * The camera centers on the rocket, then offsets slightly toward the planet
- * center so the surface stays in view rather than being clipped at the bottom.
+ * Frame the rocket "rocket-up": rocket sits in the upper third of the screen,
+ * surface curves below, sky/space above. Camera rotation is set so the
+ * radial-outward direction at the rocket's position aligns with screen up.
  */
 export function fitCamera(
   cam: Camera,
@@ -335,18 +385,18 @@ export function fitCamera(
   const r = Math.max(1, len(rocket.pos));
   const altAbove = Math.max(0, r - planet.radius);
 
-  // Visible world span in meters across the smaller screen dimension.
-  // At launch (alt ≈ 0): ~30 km span — rocket is clearly visible against the
-  // surface. As altitude grows, the span grows proportionally so apoapsis
-  // markers and the predicted orbit stay in frame.
-  const wantSpan = Math.max(20_000, altAbove * 3 + 30_000);
+  // Visible span scales with altitude. Tight at launch, wide at orbit.
+  const wantSpan = Math.max(8_000, altAbove * 2.4 + 18_000);
   const px = Math.max(1, Math.min(cam.vw, cam.vh));
   cam.metersPerPx = (wantSpan * pad) / px;
 
-  // Center on the rocket, then slide the camera back toward the planet center
-  // by a fraction of the visible span so the horizon line stays visible.
+  // Rocket-up camera rotation: align the local radial direction with screen up.
+  cam.rotation = Math.atan2(rocket.pos.y, rocket.pos.x) - Math.PI / 2;
+
+  // Center the camera below the rocket along the radial so the rocket sits in
+  // the upper portion of the screen with the curving surface visible below.
   const radial = { x: rocket.pos.x / r, y: rocket.pos.y / r };
-  const slide = wantSpan * 0.18;
+  const slide = wantSpan * 0.28;
   cam.center = {
     x: rocket.pos.x - radial.x * slide,
     y: rocket.pos.y - radial.y * slide,

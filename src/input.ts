@@ -77,9 +77,10 @@ export class Input {
   layout(vw: number, vh: number) {
     const pad = 12;
     const isNarrow = vw < 480;
-    const throttleW = isNarrow ? 56 : 80;
-    const throttleH = Math.min(vh * 0.42, 200);
-    const gimbalH = isNarrow ? 48 : 56;
+    // Bigger throttle (more tactile, easier to drag with thumb).
+    const throttleW = isNarrow ? 70 : 96;
+    const throttleH = Math.min(vh * 0.5, 260);
+    const gimbalH = isNarrow ? 64 : 72;
 
     this.rects.throttle = { x: pad, y: vh - throttleH - pad, w: throttleW, h: throttleH };
 
@@ -101,8 +102,8 @@ export class Input {
     };
 
     // Top bar pills (left to right): QUIT, ?HELP, FOLLOW, recenter target, RESET
-    const topW = 64;
-    const topH = 36;
+    const topW = isNarrow ? 60 : 72;
+    const topH = 40;
     const gap = 6;
     let tx = pad;
     this.rects.quit = { x: tx, y: pad, w: topW, h: topH };
@@ -118,8 +119,8 @@ export class Input {
     this.rects.follow = { x: rx, y: pad, w: topW, h: topH };
 
     // PRO/RET locks above gimbal.
-    const lockW = isNarrow ? 56 : 64;
-    const lockH = 36;
+    const lockW = isNarrow ? 64 : 72;
+    const lockH = 44;
     this.rects.prograde = {
       x: vw - lockW * 2 - 8 - pad,
       y: this.rects.gimbal.y - lockH - 8,
@@ -270,7 +271,10 @@ export class Input {
   private onUp = (e: PointerEvent) => {
     const entry = this.active.get(e.pointerId);
     this.active.delete(e.pointerId);
-    if (entry?.kind === "gimbal") this.state.gimbal = 0;
+    // Gimbal is STICKY: it stays where you put it. Tap the gimbal pill at its
+    // exact center to neutral, or use the recenter behavior on touch (handled
+    // implicitly — players double-tap the center). Throttle is also sticky.
+    void entry;
   };
 
   private onWheel = (e: WheelEvent) => {
@@ -310,8 +314,8 @@ export class Input {
       this.onCamera?.({ zoomFactor: 1.1, zoomAnchor: { x: 0, y: 0 } });
   };
 
-  private onKeyUp = (e: KeyboardEvent) => {
-    if (e.key === "ArrowLeft" || e.key === "a" || e.key === "ArrowRight" || e.key === "d")
-      this.state.gimbal = 0;
+  private onKeyUp = (_e: KeyboardEvent) => {
+    // Sticky gimbal: keys release without resetting. Use Q/Esc to neutral
+    // via a quit, or tap the gimbal pill at center to zero it manually.
   };
 }

@@ -1,8 +1,9 @@
 import { COLOR } from "./render";
 import type { Input } from "./input";
-import type { Rocket } from "./physics";
+import { G_STANDARD, type Planet, type Rocket } from "./physics";
 import type { OrbitElements } from "./orbit";
 import type { CameraController } from "./camera";
+import type { Tutorial } from "./tutorial";
 
 export interface HudData {
   altitude: number;
@@ -11,6 +12,10 @@ export interface HudData {
   periAlt: number; // can be negative (suborbital)
   ecc: number;
   fuelFrac: number; // 0..1
+  fuelKg: number;
+  massKg: number;
+  twr: number; // current thrust-to-weight ratio
+  deltaV: number; // remaining ΔV (m/s)
   status: "FLY" | "WIN" | "CRASH";
   message?: string;
 }
@@ -32,17 +37,21 @@ export function drawHud(
   };
 
   const lines = [
-    `ALT  ${fmt(data.altitude, "m")}`,
-    `VEL  ${fmt(data.speed, "m/s")}`,
-    `APO  ${fmt(data.apoAlt, "m")}`,
-    `PER  ${fmt(data.periAlt, "m")}`,
-    `ECC  ${data.ecc.toFixed(3)}`,
-    `FUEL ${(data.fuelFrac * 100).toFixed(0)}%`,
+    `ALT   ${fmt(data.altitude, "m")}`,
+    `VEL   ${fmt(data.speed, "m/s")}`,
+    `APO   ${fmt(data.apoAlt, "m")}`,
+    `PER   ${fmt(data.periAlt, "m")}`,
+    `ECC   ${data.ecc.toFixed(3)}`,
+    ``,
+    `FUEL  ${(data.fuelFrac * 100).toFixed(0)}%  ${fmt(data.fuelKg, "g")}`,
+    `MASS  ${fmt(data.massKg, "g")}`,
+    `TWR   ${data.twr.toFixed(2)}`,
+    `ΔV    ${fmt(data.deltaV, "m/s")}`,
   ];
   let y = 12;
   for (const ln of lines) {
     ctx.fillText(ln, 12, y);
-    y += 16;
+    y += 15;
   }
 
   if (data.status === "WIN") {
@@ -67,6 +76,65 @@ export function drawHud(
     ctx.textAlign = "center";
     ctx.fillText(data.message, vw / 2, 16);
     ctx.textAlign = "left";
+  }
+
+  ctx.restore();
+}
+
+/** Draw the tutorial banner + arrow toward the targeted pill. */
+export function drawTutorialBanner(
+  ctx: CanvasRenderingContext2D,
+  vw: number,
+  input: Input,
+  tutorial: Tutorial,
+) {
+  const step = tutorial.current();
+  if (!step) return;
+  ctx.save();
+
+  // Banner panel near the top, below the top-bar pills
+  const bw = Math.min(vw - 24, 460);
+  const bx = (vw - bw) / 2;
+  const by = 60;
+  const bh = 60;
+  ctx.fillStyle = "rgba(0,0,0,0.78)";
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = COLOR.win;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+
+  ctx.fillStyle = COLOR.win;
+  ctx.font = "bold 13px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(step.banner, bx + bw / 2, by + 8);
+
+  ctx.fillStyle = COLOR.hud;
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.fillText(step.hint, bx + bw / 2, by + 30);
+
+  // Arrow pointing at the target pill if any
+  if (step.pointAt) {
+    const target = input.layoutRects()[step.pointAt];
+    if (target) {
+      const tx = target.x + target.w / 2;
+      const ty = target.y + target.h / 2;
+      const bcx = bx + bw / 2;
+      const bcy = by + bh;
+      ctx.strokeStyle = COLOR.win;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(bcx, bcy);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // pulse outline around the target pill
+      ctx.strokeStyle = COLOR.win;
+      ctx.lineWidth = 3;
+      const pulse = 4 + Math.sin(performance.now() * 0.008) * 2;
+      ctx.strokeRect(target.x - pulse, target.y - pulse, target.w + pulse * 2, target.h + pulse * 2);
+    }
   }
 
   ctx.restore();
@@ -210,13 +278,22 @@ function roundRect(
 export function hudDataOf(
   rocket: Rocket,
   el: OrbitElements,
-  planet: { radius: number },
+  planet: Planet,
   fuelFrac: number,
   status: "FLY" | "WIN" | "CRASH",
   message?: string,
 ): HudData {
   const r = Math.hypot(rocket.pos.x, rocket.pos.y);
   const speed = Math.hypot(rocket.vel.x, rocket.vel.y);
+  const fuelKg = rocket.mass - rocket.dryMass;
+  // Current local gravity for TWR
+  const localG = planet.mu / (r * r);
+  const twr = rocket.thrust / Math.max(1, rocket.mass * localG);
+  // ΔV remaining via Tsiolkovsky: Isp * g0 * ln(m_wet / m_dry)
+  const deltaV =
+    rocket.dryMass > 0 && rocket.mass > rocket.dryMass
+      ? rocket.isp * G_STANDARD * Math.log(rocket.mass / rocket.dryMass)
+      : 0;
   return {
     altitude: r - planet.radius,
     speed,
@@ -224,6 +301,10 @@ export function hudDataOf(
     periAlt: el.periapsis - planet.radius,
     ecc: el.e,
     fuelFrac,
+    fuelKg,
+    massKg: rocket.mass,
+    twr,
+    deltaV,
     status,
     message,
   };

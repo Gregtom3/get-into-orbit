@@ -19,7 +19,7 @@ const VIEWPORTS = [
 ];
 
 function newCam(vw: number, vh: number): Camera {
-  return { center: { x: 0, y: 0 }, metersPerPx: 1000, vw, vh };
+  return { center: { x: 0, y: 0 }, metersPerPx: 1000, vw, vh, rotation: 0 };
 }
 
 /** Place the rocket at altitude `alt` above the planet, at angle `theta` around the planet center. */
@@ -133,11 +133,47 @@ describe("worldToScreen / pointOnScreen", () => {
     expect(s.x).toBeCloseTo(400);
     expect(s.y).toBeCloseTo(300);
   });
-  it("y is flipped (world up = screen up)", () => {
+  it("y is flipped (world up = screen up) when rotation = 0", () => {
     const cam = newCam(800, 600);
     cam.center = { x: 0, y: 0 };
     cam.metersPerPx = 1;
     const s = worldToScreen({ x: 0, y: 100 }, cam);
     expect(s.y).toBeCloseTo(200); // 300 - 100
+  });
+  it("rotation aligns the rotation-axis with screen up", () => {
+    // rotation = 0 → +y axis is screen up (already covered above).
+    // rotation = -π/2 → +x axis is screen up.
+    const cam = newCam(800, 600);
+    cam.center = { x: 0, y: 0 };
+    cam.metersPerPx = 1;
+    cam.rotation = -Math.PI / 2;
+    const s = worldToScreen({ x: 100, y: 0 }, cam);
+    expect(s.x).toBeCloseTo(400, 5);
+    expect(s.y).toBeCloseTo(200, 5); // 100 above center
+  });
+});
+
+describe("rocket-up camera invariant", () => {
+  // After fitCamera, the rocket's radial-outward direction in world space must
+  // map (approximately) to "screen up" — i.e., a tiny step radially outward
+  // from the rocket projects to a smaller screen y than the rocket itself.
+  it("radial outward step appears above the rocket on screen at every position", () => {
+    for (const theta of [0, Math.PI / 4, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      for (const alt of [1, 5_000, 100_000, 1_000_000]) {
+        const cam = newCam(800, 600);
+        const pos = {
+          x: Math.cos(theta) * (HOP.planet.radius + alt),
+          y: Math.sin(theta) * (HOP.planet.radius + alt),
+        };
+        const r = { ...HOP.rocket, pos, vel: { x: 0, y: 0 } };
+        fitCamera(cam, r, HOP.planet);
+        const sRocket = worldToScreen(pos, cam);
+        // Step 100m further out radially
+        const radial = { x: pos.x / Math.hypot(pos.x, pos.y), y: pos.y / Math.hypot(pos.x, pos.y) };
+        const out = { x: pos.x + radial.x * 100, y: pos.y + radial.y * 100 };
+        const sOut = worldToScreen(out, cam);
+        expect(sOut.y).toBeLessThan(sRocket.y); // screen y down → smaller = higher
+      }
+    }
   });
 });
