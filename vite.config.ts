@@ -1,9 +1,11 @@
 import { defineConfig } from "vite";
 
-// base is set at build time so the same config works locally and on GitHub Pages
-// (GH Pages serves at /<repo>/, locally we want /).
+// Use a relative base so the built bundle works whether the site is served at
+// "/", "/get-into-orbit/", or any other sub-path. This makes deployment
+// portable across GitHub Pages (root or project), custom domains, and local
+// preview without configuration changes.
 export default defineConfig({
-  base: process.env.GH_PAGES === "1" ? "/get-into-orbit/" : "/",
+  base: "./",
   build: {
     target: "es2020",
     sourcemap: true,

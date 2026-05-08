@@ -35,6 +35,8 @@ export interface Rocket {
   crashed: boolean;
   /** Total elapsed flight time (s). */
   t: number;
+  /** Visual shape id (purely cosmetic). */
+  shape?: import("./rockets").RocketKind;
 }
 
 export const G_STANDARD = 9.80665; // m/s^2 used by Isp definition

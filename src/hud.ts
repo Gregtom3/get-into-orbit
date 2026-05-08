@@ -132,8 +132,32 @@ export function drawPills(
   ctx.fillStyle = COLOR.hudDim;
   ctx.fillText("RESET", r.reset.x + r.reset.w / 2, r.reset.y + r.reset.h / 2 + 4);
 
+  // prograde/retrograde locks
+  drawLockPill(ctx, r.prograde, "PRO", s.headingMode === "prograde");
+  drawLockPill(ctx, r.retrograde, "RET", s.headingMode === "retrograde");
+
   ctx.textAlign = "left";
   ctx.restore();
+}
+
+function drawLockPill(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; w: number; h: number },
+  label: string,
+  active: boolean,
+) {
+  ctx.strokeStyle = active ? COLOR.win : COLOR.hudDim;
+  ctx.lineWidth = active ? 2 : 1.5;
+  roundRect(ctx, rect.x, rect.y, rect.w, rect.h, 18);
+  if (active) {
+    ctx.fillStyle = "rgba(184,107,255,0.18)";
+    ctx.fill();
+  }
+  ctx.stroke();
+  ctx.fillStyle = active ? COLOR.win : COLOR.hud;
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 + 4);
 }
 
 function roundRect(

@@ -1,5 +1,6 @@
 import { fromAngle, len, type Vec2 } from "./vec2";
 import type { Planet, Rocket } from "./physics";
+import { SHAPES, type RocketShape } from "./rockets";
 
 export interface Camera {
   /** World-space center of view (m). */
@@ -83,42 +84,84 @@ export function drawPlanet(
   ctx.stroke();
 }
 
-/** Draw the rocket as a small triangle pointed along its heading. */
+/** Draw the rocket using its assigned wireframe shape. */
 export function drawRocket(
   ctx: CanvasRenderingContext2D,
   rocket: Rocket,
   cam: Camera,
 ) {
+  const shape: RocketShape = SHAPES[rocket.shape ?? "scout"];
   const p = worldToScreen(rocket.pos, cam);
-  const size = 10;
+  const size = 14; // base half-extent in pixels
+  const scale = size / shape.extent;
   ctx.save();
   ctx.translate(p.x, p.y);
-  // Canvas y is flipped (screen y grows downward). Heading is in world frame
-  // where +y is up, so negate angle for the canvas rotation.
+  // Canvas y grows downward; world heading π/2 = "up". Convert.
   ctx.rotate(-rocket.heading + Math.PI / 2);
 
   // Flame
   if (rocket.throttle > 0 && !rocket.crashed) {
     ctx.strokeStyle = COLOR.flame;
     ctx.lineWidth = 1.5;
-    const flameLen = size * 1.2 * rocket.throttle * (0.85 + Math.random() * 0.3);
+    const fox = shape.flameOrigin[0] * scale;
+    const foy = shape.flameOrigin[1] * scale;
+    const fhw = shape.flameHalfWidth * scale;
+    const flameLen = scale * 1.4 * rocket.throttle * (0.8 + Math.random() * 0.4);
     ctx.beginPath();
-    ctx.moveTo(-size * 0.4, size * 0.5);
-    ctx.lineTo(0, size * 0.5 + flameLen);
-    ctx.lineTo(size * 0.4, size * 0.5);
+    ctx.moveTo(fox - fhw, foy);
+    ctx.lineTo(fox, foy + flameLen);
+    ctx.lineTo(fox + fhw, foy);
+    ctx.stroke();
+    // inner flicker
+    ctx.strokeStyle = "rgba(255,200,120,0.7)";
+    ctx.beginPath();
+    ctx.moveTo(fox - fhw * 0.5, foy);
+    ctx.lineTo(fox, foy + flameLen * 0.7);
+    ctx.lineTo(fox + fhw * 0.5, foy);
     ctx.stroke();
   }
 
   // Body
   ctx.strokeStyle = rocket.crashed ? COLOR.warn : COLOR.rocket;
   ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(0, -size); // nose
-  ctx.lineTo(size * 0.5, size * 0.5);
-  ctx.lineTo(-size * 0.5, size * 0.5);
-  ctx.closePath();
-  ctx.stroke();
+  for (const poly of shape.lines) {
+    ctx.beginPath();
+    const p0 = poly[0]!;
+    ctx.moveTo(p0[0] * scale, p0[1] * scale);
+    for (let i = 1; i < poly.length; i++) {
+      const pt = poly[i]!;
+      ctx.lineTo(pt[0] * scale, pt[1] * scale);
+    }
+    ctx.stroke();
+  }
 
+  ctx.restore();
+}
+
+/** Draw a rocket shape preview centered at (x,y) on the screen, no rotation. */
+export function drawRocketPreview(
+  ctx: CanvasRenderingContext2D,
+  shape: RocketShape,
+  x: number,
+  y: number,
+  pixelHeight: number,
+  color = COLOR.rocket,
+) {
+  const scale = pixelHeight / (shape.extent * 2);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  for (const poly of shape.lines) {
+    ctx.beginPath();
+    const p0 = poly[0]!;
+    ctx.moveTo(p0[0] * scale, p0[1] * scale);
+    for (let i = 1; i < poly.length; i++) {
+      const pt = poly[i]!;
+      ctx.lineTo(pt[0] * scale, pt[1] * scale);
+    }
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
