@@ -2,6 +2,7 @@ import { COLOR } from "./render";
 import type { Input } from "./input";
 import type { Rocket } from "./physics";
 import type { OrbitElements } from "./orbit";
+import type { CameraController } from "./camera";
 
 export interface HudData {
   altitude: number;
@@ -71,10 +72,11 @@ export function drawHud(
   ctx.restore();
 }
 
-/** Draw the three input pills as wireframes. */
+/** Draw all input pills as wireframes. */
 export function drawPills(
   ctx: CanvasRenderingContext2D,
   input: Input,
+  cameraCtrl?: CameraController,
 ) {
   const r = input.layoutRects();
   const s = input.state;
@@ -82,6 +84,7 @@ export function drawPills(
   ctx.save();
   ctx.lineWidth = 1.5;
 
+  if (!r.throttle) return;
   // throttle (vertical slider) -- left
   ctx.strokeStyle = COLOR.hud;
   roundRect(ctx, r.throttle.x, r.throttle.y, r.throttle.w, r.throttle.h, 12);
@@ -105,6 +108,7 @@ export function drawPills(
     r.throttle.y + r.throttle.h + 4,
   );
 
+  if (!r.gimbal) return;
   // gimbal (horizontal) -- bottom right
   ctx.strokeStyle = COLOR.hud;
   roundRect(ctx, r.gimbal.x, r.gimbal.y, r.gimbal.w, r.gimbal.h, 28);
@@ -119,25 +123,46 @@ export function drawPills(
   ctx.fillText("◁ GIMBAL ▷", r.gimbal.x + r.gimbal.w / 2, r.gimbal.y + r.gimbal.h / 2 + 4);
 
   // stage button (center)
-  ctx.strokeStyle = COLOR.hud;
-  roundRect(ctx, r.stage.x, r.stage.y, r.stage.w, r.stage.h, 28);
-  ctx.stroke();
-  ctx.fillStyle = COLOR.hud;
-  ctx.fillText("STAGE", r.stage.x + r.stage.w / 2, r.stage.y + r.stage.h / 2 + 4);
+  if (r.stage) {
+    ctx.strokeStyle = COLOR.hud;
+    roundRect(ctx, r.stage.x, r.stage.y, r.stage.w, r.stage.h, 28);
+    ctx.stroke();
+    ctx.fillStyle = COLOR.hud;
+    ctx.fillText("STAGE", r.stage.x + r.stage.w / 2, r.stage.y + r.stage.h / 2 + 4);
+  }
 
-  // reset (top right)
-  ctx.strokeStyle = COLOR.hudDim;
-  roundRect(ctx, r.reset.x, r.reset.y, r.reset.w, r.reset.h, 18);
-  ctx.stroke();
-  ctx.fillStyle = COLOR.hudDim;
-  ctx.fillText("RESET", r.reset.x + r.reset.w / 2, r.reset.y + r.reset.h / 2 + 4);
+  // top bar: QUIT, ?HELP, FOLLOW, CENTER, RESET
+  if (r.quit) drawTopPill(ctx, r.quit, "QUIT", COLOR.warn);
+  if (r.help) drawTopPill(ctx, r.help, "?", COLOR.hud);
+  if (r.follow) {
+    const followOn = cameraCtrl ? cameraCtrl.follow : true;
+    drawLockPill(ctx, r.follow, "FOLLOW", followOn);
+  }
+  if (r.recenter) drawTopPill(ctx, r.recenter, "◎", COLOR.hud);
+  if (r.reset) drawTopPill(ctx, r.reset, "RESTART", COLOR.hudDim);
 
   // prograde/retrograde locks
-  drawLockPill(ctx, r.prograde, "PRO", s.headingMode === "prograde");
-  drawLockPill(ctx, r.retrograde, "RET", s.headingMode === "retrograde");
+  if (r.prograde) drawLockPill(ctx, r.prograde, "PRO", s.headingMode === "prograde");
+  if (r.retrograde) drawLockPill(ctx, r.retrograde, "RET", s.headingMode === "retrograde");
 
   ctx.textAlign = "left";
   ctx.restore();
+}
+
+function drawTopPill(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; w: number; h: number },
+  label: string,
+  color: string,
+) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, rect.x, rect.y, rect.w, rect.h, 18);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 + 4);
 }
 
 function drawLockPill(

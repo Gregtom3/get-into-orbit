@@ -6,9 +6,11 @@ import {
   COLOR,
   clearFrame,
   drawApsisMarker,
+  drawOffscreenIndicator,
   drawPlanet,
   drawRocket,
   drawStars,
+  drawTerrain,
   drawWorldPath,
   fitCamera,
   type Camera,
@@ -22,19 +24,31 @@ import { applyOverrides, readParams } from "./params";
 import { recordScore, bestScore } from "./scores";
 import { ensureContext, sfx, setThrust, silence, applySettingsToAudio } from "./audio";
 import { settings } from "./settings";
+import { applyController, makeController, panByPixels, recenter, zoomBy } from "./camera";
+import { HelpOverlay } from "./help";
+import { applyTuning, SetupScreen } from "./setup";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const params = readParams();
 
 let cam: Camera = { center: { x: 0, y: 0 }, metersPerPx: 5000, vw: 0, vh: 0 };
-let smoothMpp = 5000; // smoothed metersPerPx for the camera
+let smoothMpp = 5000;
 let dpr = 1;
 
 const input = new Input(canvas);
 const menu = new Menu();
+const setup = new SetupScreen();
+const help = new HelpOverlay();
+const cameraCtrl = makeController();
 
-type Scene = "menu" | "play";
+input.onCamera = (intent) => {
+  if (scene !== "play") return;
+  if (intent.panPx) panByPixels(cameraCtrl, cam, intent.panPx.dx, intent.panPx.dy);
+  if (intent.zoomFactor) zoomBy(cameraCtrl, cam, intent.zoomFactor, intent.zoomAnchor);
+};
+
+type Scene = "menu" | "setup" | "play";
 let scene: Scene = "menu";
 
 type Status = "FLY" | "WIN" | "CRASH";
@@ -48,7 +62,8 @@ let pitchFromVertical = 0;
 let lastT = performance.now();
 let physAccum = 0;
 const PHYS_DT = 1 / 120;
-const TURN_RATE_BASE = 1.4; // rad/s
+const TURN_RATE_BASE = 1.4;
+let planetYaw = 0; // accumulates over time for the rotating wireframe globe
 
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -61,34 +76,68 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   input.layout(cam.vw, cam.vh);
   menu.layout(cam.vw, cam.vh);
+  setup.layout(cam.vw, cam.vh);
+  help.layout(cam.vw, cam.vh);
 }
 window.addEventListener("resize", resize);
 resize();
 
-// Menu pointer handling: separate listener so it works even when game scene
-// uses canvas pointer events for sliders. We forward-route on the scene.
-canvas.addEventListener("pointerdown", (e) => {
-  // First user gesture — boot audio.
-  ensureContext();
-  applySettingsToAudio();
-  if (scene !== "menu") return;
-  const r = canvas.getBoundingClientRect();
-  const x = e.clientX - r.left;
-  const y = e.clientY - r.top;
-  const action = menu.hit(x, y);
-  if (!action) return;
-  e.preventDefault();
-  if (action.kind === "play") {
-    sfx.uiClick();
-    startLevel(action.levelId);
-  } else if (action.kind === "openSettings" || action.kind === "closeSettings") {
-    sfx.uiClick();
-    menu.apply(action);
-  } else {
-    sfx.uiClick();
-    menu.apply(action);
-  }
-});
+// Menu / setup pointer routing.
+canvas.addEventListener(
+  "pointerdown",
+  (e) => {
+    ensureContext();
+    applySettingsToAudio();
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    if (help.visible) {
+      e.preventDefault();
+      help.hit(x, y);
+      sfx.uiClick();
+      return;
+    }
+    if (scene === "menu") {
+      const action = menu.hit(x, y);
+      if (!action) return;
+      e.preventDefault();
+      sfx.uiClick();
+      if (action.kind === "play") {
+        const lvl = levelById(action.levelId);
+        if (lvl) {
+          setup.setLevel(lvl);
+          scene = "setup";
+        }
+      } else {
+        menu.apply(action);
+      }
+    } else if (scene === "setup") {
+      const a = setup.hit(x, y);
+      if (a?.kind === "back") {
+        sfx.uiClick();
+        scene = "menu";
+        e.preventDefault();
+      } else if (a?.kind === "launch") {
+        sfx.uiClick();
+        startLevel(setup.level!.id, true);
+        e.preventDefault();
+      }
+    }
+  },
+  { capture: true }, // run before Input's listener so menu clicks aren't treated as pan
+);
+
+// Drag on setup sliders.
+canvas.addEventListener(
+  "pointermove",
+  (e) => {
+    if (scene !== "setup") return;
+    if (!(e.buttons & 1) && e.pointerType !== "touch") return;
+    const r = canvas.getBoundingClientRect();
+    setup.drag(e.clientX - r.left, e.clientY - r.top);
+  },
+  { capture: true },
+);
 
 function cloneRocket(r: Rocket): Rocket {
   return {
@@ -108,9 +157,13 @@ function cloneRocket(r: Rocket): Rocket {
   };
 }
 
-function startLevel(id: string) {
+function startLevel(id: string, useSetupTuning = false) {
   const base = levelById(id) ?? LEVELS[0]!;
-  level = applyOverrides(base, params);
+  let configured = applyOverrides(base, params);
+  if (useSetupTuning && setup.level?.id === id) {
+    configured = applyTuning(configured, setup.tuning);
+  }
+  level = configured;
   planet = level.planet;
   rocket = cloneRocket(level.rocket);
   initialFuel = rocket.mass - rocket.dryMass;
@@ -120,7 +173,7 @@ function startLevel(id: string) {
   input.state.throttle = 0;
   input.state.gimbal = 0;
   input.state.headingMode = "manual";
-  // Initial camera so the first frame doesn't whip into place.
+  recenter(cameraCtrl);
   fitCamera(cam, rocket, planet);
   smoothMpp = cam.metersPerPx;
   scene = "play";
@@ -131,30 +184,42 @@ function backToMenu() {
   scene = "menu";
 }
 
-// If a ?level=… is present, skip the menu and launch straight in.
 if (params.level) {
   const found = levelById(params.level);
-  if (found) startLevel(found.id);
+  if (found) {
+    setup.setLevel(found);
+    startLevel(found.id, false);
+  }
 }
 
-// --- main loop ---
 function frame(now: number) {
   const dtReal = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
 
-  if (scene === "menu") {
-    drawMenu();
-  } else {
+  // The planet always rotates slowly (visual only — no effect on physics).
+  planetYaw += dtReal * 0.04;
+
+  if (scene === "menu") drawMenu();
+  else if (scene === "setup") drawSetup();
+  else {
     update(dtReal);
     draw();
   }
+  if (help.visible) help.draw(ctx);
   requestAnimationFrame(frame);
 }
 
 function update(dtReal: number) {
   const edges = input.consumeEdges();
+  if (edges.help) help.toggle();
+  if (edges.recenter) recenter(cameraCtrl);
+  if (edges.followToggle) cameraCtrl.follow = !cameraCtrl.follow;
+  if (edges.quit) {
+    backToMenu();
+    return;
+  }
   if (edges.reset) {
-    if (status === "FLY") startLevel(level.id);
+    if (status === "FLY") startLevel(level.id, true);
     else backToMenu();
   }
 
@@ -212,11 +277,17 @@ function update(dtReal: number) {
     silence();
   }
 
-  // Smooth camera zoom: target via fitCamera, ease metersPerPx toward it.
-  fitCamera(cam, rocket, planet);
-  const k = 1 - Math.exp(-dtReal * 3); // smoothing factor
-  smoothMpp = smoothMpp + (cam.metersPerPx - smoothMpp) * k;
-  cam.metersPerPx = smoothMpp;
+  // Camera: auto-fit only if FOLLOW is on. Manual mode preserves user pan/zoom.
+  if (cameraCtrl.follow) {
+    fitCamera(cam, rocket, planet);
+    const k = 1 - Math.exp(-dtReal * 3);
+    smoothMpp = smoothMpp + (cam.metersPerPx - smoothMpp) * k;
+    cam.metersPerPx = smoothMpp;
+  } else {
+    fitCamera(cam, rocket, planet);
+    applyController(cam, cameraCtrl);
+    smoothMpp = cam.metersPerPx;
+  }
 }
 
 function altitudeAbove(p: Planet) {
@@ -226,7 +297,8 @@ function altitudeAbove(p: Planet) {
 function draw() {
   clearFrame(ctx, cam);
   drawStars(ctx, cam, 7);
-  drawPlanet(ctx, planet, cam);
+  drawPlanet(ctx, planet, cam, planetYaw);
+  drawTerrain(ctx, planet, cam, level.id.charCodeAt(0));
 
   const r = len(rocket.pos);
   const predSec = Math.min(
@@ -240,14 +312,14 @@ function draw() {
   if (pred.impact) drawApsisMarker(ctx, pred.impact, cam, "IMPACT", COLOR.warn);
 
   drawRocket(ctx, rocket, cam);
+  drawOffscreenIndicator(ctx, rocket, cam);
 
   const el = elements(rocket.pos, rocket.vel, planet);
   const fuelFrac = initialFuel === 0 ? 0 : Math.max(0, (rocket.mass - rocket.dryMass) / initialFuel);
   const data: HudData = hudDataOf(rocket, el, planet, fuelFrac, status, hint());
   drawHud(ctx, cam.vw, data);
-  drawPills(ctx, input);
+  drawPills(ctx, input, cameraCtrl);
 
-  // Best-score badge at top center
   const best = bestScore(level.id);
   if (best) {
     ctx.fillStyle = COLOR.hudDim;
@@ -265,7 +337,36 @@ function draw() {
 function drawMenu() {
   clearFrame(ctx, cam);
   drawStars(ctx, cam, 11);
+  // Animated background: a small wireframe globe centered behind the title.
+  drawMenuPlanet();
   menu.draw(ctx);
+}
+
+function drawMenuPlanet() {
+  // Render an oversized planet in the background using a temporary camera.
+  const tmpCam: Camera = {
+    center: { x: 0, y: 0 },
+    metersPerPx: 1,
+    vw: cam.vw,
+    vh: cam.vh,
+  };
+  // Pretend the planet has a fixed 120-pixel radius regardless of size.
+  const fakePlanet: Planet = {
+    mu: 1,
+    radius: 120,
+    atmoTop: 0,
+    atmoScaleHeight: 0,
+    atmoSeaLevelDensity: 0,
+  };
+  // Translate so the globe sits behind the title (top center).
+  ctx.save();
+  ctx.translate(0, -cam.vh * 0.18);
+  drawPlanet(ctx, fakePlanet, tmpCam, planetYaw);
+  ctx.restore();
+}
+
+function drawSetup() {
+  setup.draw(ctx);
 }
 
 function hint(): string | undefined {

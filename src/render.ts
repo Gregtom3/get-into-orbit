@@ -1,6 +1,7 @@
 import { fromAngle, len, type Vec2 } from "./vec2";
 import type { Planet, Rocket } from "./physics";
 import { SHAPES, type RocketShape } from "./rockets";
+import { projectSphere } from "./sphere3d";
 
 export interface Camera {
   /** World-space center of view (m). */
@@ -38,17 +39,21 @@ export function clearFrame(ctx: CanvasRenderingContext2D, cam: Camera) {
   ctx.fillRect(0, 0, cam.vw, cam.vh);
 }
 
-/** Draw the planet as an outlined circle with a faint atmosphere ring. */
+/**
+ * Draw the planet as a 3D-projected wireframe globe (lat/lon grid rotating
+ * around Y) plus a hard outline at the limb and a faint atmosphere ring.
+ */
 export function drawPlanet(
   ctx: CanvasRenderingContext2D,
   planet: Planet,
   cam: Camera,
+  yawRad = 0,
 ) {
   const c = worldToScreen({ x: 0, y: 0 }, cam);
   const rPx = planet.radius / cam.metersPerPx;
   if (rPx < 1) return;
 
-  // Atmosphere
+  // Atmosphere ring
   if (planet.atmoTop > 0) {
     const atmoPx = (planet.radius + planet.atmoTop) / cam.metersPerPx;
     ctx.strokeStyle = COLOR.atmo;
@@ -60,28 +65,91 @@ export function drawPlanet(
     ctx.setLineDash([]);
   }
 
-  // Planet outline
+  // 3D wireframe interior (front-face only)
+  if (rPx > 18) {
+    const polylines = projectSphere(yawRad);
+    ctx.strokeStyle = COLOR.grid;
+    ctx.lineWidth = 1;
+    for (const pl of polylines) {
+      if (pl.pts.length < 2) continue;
+      ctx.beginPath();
+      const p0 = pl.pts[0]!;
+      ctx.moveTo(c.x + p0[0] * rPx, c.y - p0[1] * rPx);
+      for (let i = 1; i < pl.pts.length; i++) {
+        const p = pl.pts[i]!;
+        ctx.lineTo(c.x + p[0] * rPx, c.y - p[1] * rPx);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Hard limb outline
   ctx.strokeStyle = COLOR.planet;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.arc(c.x, c.y, rPx, 0, Math.PI * 2);
   ctx.stroke();
+}
 
-  // Latitude grid (subtle Tron-y feel)
-  ctx.strokeStyle = COLOR.grid;
+/**
+ * Surface terrain — radial spikes (mountains) on the visible limb plus a
+ * launch pad marker at the start position. Cheap: deterministic from a seed
+ * so it doesn't shimmer.
+ */
+export function drawTerrain(
+  ctx: CanvasRenderingContext2D,
+  planet: Planet,
+  cam: Camera,
+  seed = 1,
+) {
+  const c = worldToScreen({ x: 0, y: 0 }, cam);
+  const rPx = planet.radius / cam.metersPerPx;
+  if (rPx < 30) return;
+
+  ctx.strokeStyle = COLOR.planet;
   ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
+
+  const count = 96;
+  for (let i = 0; i < count; i++) {
+    const theta = (i / count) * Math.PI * 2;
+    // Pseudo-random terrain height in pixels
+    const h = (hash(i + seed) * 0.6 + 0.2) * Math.min(8, rPx * 0.025);
+    const cx = Math.cos(theta);
+    const sy = Math.sin(theta);
+    const x0 = c.x + cx * rPx;
+    const y0 = c.y - sy * rPx;
+    const x1 = c.x + cx * (rPx + h);
+    const y1 = c.y - sy * (rPx + h);
     ctx.beginPath();
-    ctx.arc(c.x, c.y, (rPx * i) / 4, 0, Math.PI * 2);
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
     ctx.stroke();
   }
-  // Equator + meridian
+
+  // Launch pad: small structure at the launch site (planet's +y axis).
+  const padTheta = Math.PI / 2;
+  const cx = Math.cos(padTheta);
+  const sy = Math.sin(padTheta);
+  const baseX = c.x + cx * rPx;
+  const baseY = c.y - sy * rPx;
+  const towerH = 18;
+  const towerW = 6;
+  ctx.strokeStyle = COLOR.hud;
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(c.x - rPx, c.y);
-  ctx.lineTo(c.x + rPx, c.y);
-  ctx.moveTo(c.x, c.y - rPx);
-  ctx.lineTo(c.x, c.y + rPx);
+  ctx.moveTo(baseX - towerW, baseY);
+  ctx.lineTo(baseX - towerW, baseY - towerH);
+  ctx.lineTo(baseX + towerW, baseY - towerH);
+  ctx.lineTo(baseX + towerW, baseY);
+  ctx.moveTo(baseX, baseY);
+  ctx.lineTo(baseX, baseY - towerH - 8);
   ctx.stroke();
+}
+
+function hash(n: number): number {
+  // Cheap deterministic [0,1) hash.
+  const x = Math.sin(n * 9301.31 + 49297) * 233280;
+  return x - Math.floor(x);
 }
 
 /** Draw the rocket using its assigned wireframe shape. */
@@ -92,7 +160,9 @@ export function drawRocket(
 ) {
   const shape: RocketShape = SHAPES[rocket.shape ?? "scout"];
   const p = worldToScreen(rocket.pos, cam);
-  const size = 14; // base half-extent in pixels
+  // Minimum on-screen rocket size: never less than 18px half-extent so the
+  // rocket is always visible regardless of zoom level.
+  const size = 18;
   const scale = size / shape.extent;
   ctx.save();
   ctx.translate(p.x, p.y);
@@ -135,6 +205,50 @@ export function drawRocket(
     ctx.stroke();
   }
 
+  ctx.restore();
+}
+
+/**
+ * If the rocket is somehow off-screen (after a bug, weird zoom, etc.), draw
+ * a chevron arrow at the screen edge pointing toward it so the player can
+ * never lose track of where it is.
+ */
+export function drawOffscreenIndicator(
+  ctx: CanvasRenderingContext2D,
+  rocket: Rocket,
+  cam: Camera,
+) {
+  const s = worldToScreen(rocket.pos, cam);
+  const margin = 28;
+  if (
+    s.x >= margin &&
+    s.x <= cam.vw - margin &&
+    s.y >= margin &&
+    s.y <= cam.vh - margin
+  ) {
+    return; // visible
+  }
+  const cx = cam.vw / 2;
+  const cy = cam.vh / 2;
+  const dx = s.x - cx;
+  const dy = s.y - cy;
+  // Clamp the arrow tip to within the visible margin band.
+  const halfW = cam.vw / 2 - margin;
+  const halfH = cam.vh / 2 - margin;
+  const t = Math.min(halfW / Math.max(1, Math.abs(dx)), halfH / Math.max(1, Math.abs(dy)));
+  const ax = cx + dx * t;
+  const ay = cy + dy * t;
+  const angle = Math.atan2(dy, dx);
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(angle);
+  ctx.strokeStyle = COLOR.warn;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-12, -8);
+  ctx.lineTo(0, 0);
+  ctx.lineTo(-12, 8);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -204,21 +318,50 @@ export function drawStars(
   }
 }
 
-/** Choose a metersPerPx that fits the rocket and the planet limb on screen. */
+/**
+ * Choose a metersPerPx and center so the rocket is ALWAYS on screen plus a
+ * chunk of surface beneath it.
+ *
+ * Strategy: the visible span scales with altitude (close in low, wide high).
+ * The camera centers on the rocket, then offsets slightly toward the planet
+ * center so the surface stays in view rather than being clipped at the bottom.
+ */
 export function fitCamera(
   cam: Camera,
   rocket: Rocket,
   planet: Planet,
-  pad = 1.4,
+  pad = 1.2,
 ): void {
-  const r = len(rocket.pos);
+  const r = Math.max(1, len(rocket.pos));
   const altAbove = Math.max(0, r - planet.radius);
-  // Want to see at least the local horizon and a margin above the rocket.
-  const wantSpan = Math.max(planet.radius * 0.25, altAbove * 2 + 50_000);
-  const px = Math.min(cam.vw, cam.vh);
+
+  // Visible world span in meters across the smaller screen dimension.
+  // At launch (alt ≈ 0): ~30 km span — rocket is clearly visible against the
+  // surface. As altitude grows, the span grows proportionally so apoapsis
+  // markers and the predicted orbit stay in frame.
+  const wantSpan = Math.max(20_000, altAbove * 3 + 30_000);
+  const px = Math.max(1, Math.min(cam.vw, cam.vh));
   cam.metersPerPx = (wantSpan * pad) / px;
-  // Camera follows rocket but biases toward the planet so the surface stays in view.
-  cam.center = { x: rocket.pos.x * 0.6, y: rocket.pos.y * 0.6 };
+
+  // Center on the rocket, then slide the camera back toward the planet center
+  // by a fraction of the visible span so the horizon line stays visible.
+  const radial = { x: rocket.pos.x / r, y: rocket.pos.y / r };
+  const slide = wantSpan * 0.18;
+  cam.center = {
+    x: rocket.pos.x - radial.x * slide,
+    y: rocket.pos.y - radial.y * slide,
+  };
+}
+
+/** True iff the world-space point is currently inside the camera's CSS-pixel viewport. */
+export function pointOnScreen(p: Vec2, cam: Camera, marginPx = 0): boolean {
+  const s = worldToScreen(p, cam);
+  return (
+    s.x >= -marginPx &&
+    s.x <= cam.vw + marginPx &&
+    s.y >= -marginPx &&
+    s.y <= cam.vh + marginPx
+  );
 }
 
 /** Apoapsis/periapsis markers along the predicted trajectory polyline (decorative). */
