@@ -89,4 +89,13 @@ describe("Input layout fits the smallest target viewport", () => {
       }
     }
   });
+
+  it("warp pill exists and has a tappable footprint", () => {
+    const inp = new Input(fakeCanvas());
+    inp.layout(320, 568);
+    const r = inp.layoutRects();
+    expect(r.warp).toBeTruthy();
+    expect(r.warp!.w).toBeGreaterThanOrEqual(40);
+    expect(r.warp!.h).toBeGreaterThanOrEqual(36);
+  });
 });

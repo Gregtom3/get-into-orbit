@@ -3,7 +3,6 @@ import type { Input } from "./input";
 import { G_STANDARD, type Planet, type Rocket } from "./physics";
 import type { OrbitElements } from "./orbit";
 import type { CameraController } from "./camera";
-import type { Tutorial } from "./tutorial";
 
 export interface HudData {
   altitude: number;
@@ -26,9 +25,13 @@ export function drawHud(
   data: HudData,
 ) {
   ctx.save();
+  // Narrower phones get a smaller HUD font so it doesn't crowd the gimbal pill.
+  const isNarrow = vw < 480;
+  const px = isNarrow ? 11 : 12;
   ctx.fillStyle = COLOR.hud;
-  ctx.font = "12px ui-monospace, monospace";
+  ctx.font = `${px}px ui-monospace, monospace`;
   ctx.textBaseline = "top";
+  ctx.textAlign = "left";
 
   const fmt = (n: number, unit: string) => {
     if (!isFinite(n)) return `∞ ${unit}`;
@@ -37,21 +40,21 @@ export function drawHud(
   };
 
   const lines = [
-    `ALT   ${fmt(data.altitude, "m")}`,
-    `VEL   ${fmt(data.speed, "m/s")}`,
-    `APO   ${fmt(data.apoAlt, "m")}`,
-    `PER   ${fmt(data.periAlt, "m")}`,
-    `ECC   ${data.ecc.toFixed(3)}`,
-    ``,
-    `FUEL  ${(data.fuelFrac * 100).toFixed(0)}%  ${fmt(data.fuelKg, "g")}`,
-    `MASS  ${fmt(data.massKg, "g")}`,
-    `TWR   ${data.twr.toFixed(2)}`,
-    `ΔV    ${fmt(data.deltaV, "m/s")}`,
+    `ALT  ${fmt(data.altitude, "m")}`,
+    `VEL  ${fmt(data.speed, "m/s")}`,
+    `APO  ${fmt(data.apoAlt, "m")}`,
+    `PER  ${fmt(data.periAlt, "m")}`,
+    `ECC  ${data.ecc.toFixed(3)}`,
+    `FUEL ${(data.fuelFrac * 100).toFixed(0)}%`,
+    `TWR  ${data.twr.toFixed(2)}`,
+    `ΔV   ${fmt(data.deltaV, "m/s")}`,
   ];
-  let y = 12;
+  // HUD lives below the top-bar pills (which are ~52px tall).
+  let y = 64;
+  const lh = isNarrow ? 13 : 15;
   for (const ln of lines) {
-    ctx.fillText(ln, 12, y);
-    y += 15;
+    ctx.fillText(ln, 8, y);
+    y += lh;
   }
 
   if (data.status === "WIN") {
@@ -81,70 +84,12 @@ export function drawHud(
   ctx.restore();
 }
 
-/** Draw the tutorial banner + arrow toward the targeted pill. */
-export function drawTutorialBanner(
-  ctx: CanvasRenderingContext2D,
-  vw: number,
-  input: Input,
-  tutorial: Tutorial,
-) {
-  const step = tutorial.current();
-  if (!step) return;
-  ctx.save();
-
-  // Banner panel near the top, below the top-bar pills
-  const bw = Math.min(vw - 24, 460);
-  const bx = (vw - bw) / 2;
-  const by = 60;
-  const bh = 60;
-  ctx.fillStyle = "rgba(0,0,0,0.78)";
-  ctx.fillRect(bx, by, bw, bh);
-  ctx.strokeStyle = COLOR.win;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
-
-  ctx.fillStyle = COLOR.win;
-  ctx.font = "bold 13px ui-monospace, monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillText(step.banner, bx + bw / 2, by + 8);
-
-  ctx.fillStyle = COLOR.hud;
-  ctx.font = "12px ui-monospace, monospace";
-  ctx.fillText(step.hint, bx + bw / 2, by + 30);
-
-  // Arrow pointing at the target pill if any
-  if (step.pointAt) {
-    const target = input.layoutRects()[step.pointAt];
-    if (target) {
-      const tx = target.x + target.w / 2;
-      const ty = target.y + target.h / 2;
-      const bcx = bx + bw / 2;
-      const bcy = by + bh;
-      ctx.strokeStyle = COLOR.win;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 6]);
-      ctx.beginPath();
-      ctx.moveTo(bcx, bcy);
-      ctx.lineTo(tx, ty);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      // pulse outline around the target pill
-      ctx.strokeStyle = COLOR.win;
-      ctx.lineWidth = 3;
-      const pulse = 4 + Math.sin(performance.now() * 0.008) * 2;
-      ctx.strokeRect(target.x - pulse, target.y - pulse, target.w + pulse * 2, target.h + pulse * 2);
-    }
-  }
-
-  ctx.restore();
-}
-
 /** Draw all input pills as wireframes. */
 export function drawPills(
   ctx: CanvasRenderingContext2D,
   input: Input,
   cameraCtrl?: CameraController,
+  warpFactor = 1,
 ) {
   const r = input.layoutRects();
   const s = input.state;
@@ -199,15 +144,19 @@ export function drawPills(
     ctx.fillText("STAGE", r.stage.x + r.stage.w / 2, r.stage.y + r.stage.h / 2 + 4);
   }
 
-  // top bar: QUIT, ?HELP, FOLLOW, CENTER, RESET
+  // top bar: QUIT, WARP, FOLLOW, CENTER, RESET (HELP/? removed with tutorial)
   if (r.quit) drawTopPill(ctx, r.quit, "QUIT", COLOR.warn);
-  if (r.help) drawTopPill(ctx, r.help, "?", COLOR.hud);
+  if (r.warp) {
+    // WARP pill highlights when greater than 1×.
+    const active = warpFactor > 1;
+    drawLockPill(ctx, r.warp, `${warpFactor}×`, active);
+  }
   if (r.follow) {
     const followOn = cameraCtrl ? cameraCtrl.follow : true;
     drawLockPill(ctx, r.follow, "FOLLOW", followOn);
   }
   if (r.recenter) drawTopPill(ctx, r.recenter, "◎", COLOR.hud);
-  if (r.reset) drawTopPill(ctx, r.reset, "RESTART", COLOR.hudDim);
+  if (r.reset) drawTopPill(ctx, r.reset, "RESET", COLOR.hudDim);
 
   // prograde/retrograde locks
   if (r.prograde) drawLockPill(ctx, r.prograde, "PRO", s.headingMode === "prograde");

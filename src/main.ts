@@ -16,7 +16,7 @@ import {
   type Camera,
 } from "./render";
 import { Input } from "./input";
-import { drawHud, drawPills, drawTutorialBanner, hudDataOf, type HudData } from "./hud";
+import { drawHud, drawPills, hudDataOf, type HudData } from "./hud";
 import { len } from "./vec2";
 import { slewHeading, targetHeading } from "./autopilot";
 import { Menu } from "./menu";
@@ -25,9 +25,7 @@ import { recordScore, bestScore } from "./scores";
 import { ensureContext, sfx, setThrust, silence, applySettingsToAudio } from "./audio";
 import { settings } from "./settings";
 import { applyController, makeController, panByPixels, recenter, zoomBy } from "./camera";
-import { HelpOverlay } from "./help";
 import { applyTuning, SetupScreen } from "./setup";
-import { Tutorial } from "./tutorial";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -40,9 +38,15 @@ let dpr = 1;
 const input = new Input(canvas);
 const menu = new Menu();
 const setup = new SetupScreen();
-const help = new HelpOverlay();
-const tutorial = new Tutorial();
 const cameraCtrl = makeController();
+
+// Time warp: physics steps per real second multiplier. Cycles 1×→2×→4×→8×→16×.
+const WARP_LEVELS = [1, 2, 4, 8, 16] as const;
+let warpIdx = 0;
+const warpFactor = () => WARP_LEVELS[warpIdx]!;
+const cycleWarp = () => {
+  warpIdx = (warpIdx + 1) % WARP_LEVELS.length;
+};
 
 input.onCamera = (intent) => {
   if (scene !== "play") return;
@@ -79,7 +83,6 @@ function resize() {
   input.layout(cam.vw, cam.vh);
   menu.layout(cam.vw, cam.vh);
   setup.layout(cam.vw, cam.vh);
-  help.layout(cam.vw, cam.vh);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -93,12 +96,6 @@ canvas.addEventListener(
     const r = canvas.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
-    if (help.visible) {
-      e.preventDefault();
-      help.hit(x, y);
-      sfx.uiClick();
-      return;
-    }
     if (scene === "menu") {
       const action = menu.hit(x, y);
       if (!action) return;
@@ -178,8 +175,7 @@ function startLevel(id: string, useSetupTuning = false) {
   recenter(cameraCtrl);
   fitCamera(cam, rocket, planet);
   smoothMpp = cam.metersPerPx;
-  // Auto-start tutorial only the first time the player ever launches.
-  tutorial.maybeStart();
+  warpIdx = 0;
   scene = "play";
 }
 
@@ -209,19 +205,17 @@ function frame(now: number) {
     update(dtReal);
     draw();
   }
-  if (help.visible) help.draw(ctx);
   requestAnimationFrame(frame);
 }
 
 function update(dtReal: number) {
   const edges = input.consumeEdges();
-  if (edges.help) {
-    // Tap ? to (re)start the tutorial as well as toggle the help overlay.
-    if (!tutorial.active) tutorial.start();
-    else help.toggle();
-  }
   if (edges.recenter) recenter(cameraCtrl);
   if (edges.followToggle) cameraCtrl.follow = !cameraCtrl.follow;
+  if (edges.warpCycle) {
+    cycleWarp();
+    sfx.uiClick();
+  }
   if (edges.quit) {
     backToMenu();
     return;
@@ -247,10 +241,18 @@ function update(dtReal: number) {
       pitchFromVertical = radial - rocket.heading;
     }
 
-    physAccum += dtReal;
-    while (physAccum >= PHYS_DT) {
+    // Time warp: scale simulated time by the current warp factor while
+    // keeping each integration step at PHYS_DT for accuracy. This means more
+    // physics steps per render frame at higher warp.
+    physAccum += dtReal * warpFactor();
+    let safety = 0;
+    while (physAccum >= PHYS_DT && safety++ < 4096) {
       step(rocket, planet, PHYS_DT);
       physAccum -= PHYS_DT;
+      if (rocket.crashed) {
+        physAccum = 0;
+        break;
+      }
     }
 
     if (rocket.crashed && status === "FLY") {
@@ -263,12 +265,14 @@ function update(dtReal: number) {
     ) {
       const el = elements(rocket.pos, rocket.vel, planet);
       if (el.e <= level.maxEcc && el.periapsis - planet.radius >= level.minPeriAlt) {
-        winHoldTime += dtReal;
+        // Hold-time accumulates in REAL seconds at warp 1, but in simulated
+        // time as warp increases — using simulated seconds keeps the win
+        // criterion fair regardless of warp factor.
+        winHoldTime += dtReal * warpFactor();
         if (winHoldTime > 4) {
           status = "WIN";
           silence();
           sfx.win();
-          tutorial.win();
           recordScore(level.id, {
             seconds: rocket.t,
             fuelFrac: Math.max(0, (rocket.mass - rocket.dryMass) / Math.max(initialFuel, 1)),
@@ -282,16 +286,6 @@ function update(dtReal: number) {
     } else {
       winHoldTime = 0;
     }
-
-    // Tutorial advance (uses live game state)
-    const elNow = elements(rocket.pos, rocket.vel, planet);
-    tutorial.tick({
-      rocket,
-      el: elNow,
-      altAbove: altitudeAbove(planet),
-      input: input.state,
-      level: { minPeriAlt: level.minPeriAlt, maxEcc: level.maxEcc },
-    });
   } else {
     silence();
   }
@@ -337,20 +331,19 @@ function draw() {
   const fuelFrac = initialFuel === 0 ? 0 : Math.max(0, (rocket.mass - rocket.dryMass) / initialFuel);
   const data: HudData = hudDataOf(rocket, el, planet, fuelFrac, status, hint());
   drawHud(ctx, cam.vw, data);
-  drawPills(ctx, input, cameraCtrl);
-  drawTutorialBanner(ctx, cam.vw, input, tutorial);
+  drawPills(ctx, input, cameraCtrl, warpFactor());
 
+  // Best-score badge — only shown when there's room above the bottom pill row.
   const best = bestScore(level.id);
-  if (best) {
+  if (best && cam.vh > 540) {
     ctx.fillStyle = COLOR.hudDim;
-    ctx.font = "11px ui-monospace, monospace";
-    ctx.textAlign = "center";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.textAlign = "left";
     ctx.fillText(
-      `${level.name}  BEST ${best.seconds.toFixed(1)}s  FUEL ${(best.fuelFrac * 100).toFixed(0)}%`,
-      cam.vw / 2,
+      `BEST ${best.seconds.toFixed(1)}s  FUEL ${(best.fuelFrac * 100).toFixed(0)}%`,
+      8,
       cam.vh - 14,
     );
-    ctx.textAlign = "left";
   }
 }
 
@@ -394,11 +387,12 @@ function hint(): string | undefined {
   if (status !== "FLY") return undefined;
   const el = elements(rocket.pos, rocket.vel, planet);
   const periAlt = el.periapsis - planet.radius;
-  if (periAlt < 0) return `${level.name} — RAISE PERIAPSIS ABOVE ${(level.minPeriAlt / 1000).toFixed(0)} km`;
+  const need = (level.minPeriAlt / 1000).toFixed(0);
+  if (periAlt < 0) return `RAISE PER >${need}km`;
   if (periAlt < level.minPeriAlt)
-    return `${level.name} — PERIAPSIS ${(periAlt / 1000).toFixed(1)} km, NEED ${(level.minPeriAlt / 1000).toFixed(0)} km`;
-  if (el.e > level.maxEcc) return `${level.name} — CIRCULARIZE (ECC ${el.e.toFixed(2)})`;
-  return `${level.name} — HOLD ORBIT ${(4 - winHoldTime).toFixed(1)}s`;
+    return `PER ${(periAlt / 1000).toFixed(1)}km / ${need}km`;
+  if (el.e > level.maxEcc) return `CIRCULARIZE  ECC ${el.e.toFixed(2)}`;
+  return `HOLD  ${(4 - winHoldTime).toFixed(1)}s`;
 }
 
 requestAnimationFrame(frame);

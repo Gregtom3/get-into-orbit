@@ -57,7 +57,7 @@ export const HOP: Level = (() => {
   return {
     id: "hop",
     name: "HOP",
-    blurb: "Tiny rocky body. No atmosphere. Reach a 5 km orbit.",
+    blurb: "No air. Reach 5 km orbit.",
     planet,
     rocket: rocketAtSurface(planet, {
       mass: 4_000,
@@ -89,7 +89,7 @@ export const ASCENT: Level = (() => {
   return {
     id: "ascent",
     name: "ASCENT",
-    blurb: "Atmosphere fights you. Pitch over above 3 km.",
+    blurb: "Atmosphere. 25 km orbit.",
     planet,
     rocket: rocketAtSurface(planet, {
       mass: 80_000,
@@ -121,7 +121,7 @@ export const HEAVY_LIFT: Level = (() => {
   return {
     id: "heavy",
     name: "HEAVY",
-    blurb: "Heavy world, dense air. Three cores, brute force.",
+    blurb: "Heavy world. 50 km orbit.",
     planet,
     rocket: rocketAtSurface(planet, {
       mass: 220_000,

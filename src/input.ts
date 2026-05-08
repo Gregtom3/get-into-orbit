@@ -16,7 +16,7 @@ export interface InputState {
   resetPressed: boolean;
   recenterPressed: boolean;
   followTogglePressed: boolean;
-  helpPressed: boolean;
+  warpCyclePressed: boolean;
   quitPressed: boolean;
   headingMode: HeadingMode;
 }
@@ -50,7 +50,7 @@ export class Input {
     resetPressed: false,
     recenterPressed: false,
     followTogglePressed: false,
-    helpPressed: false,
+    warpCyclePressed: false,
     quitPressed: false,
     headingMode: "manual",
   };
@@ -101,15 +101,15 @@ export class Input {
       h: gimbalH,
     };
 
-    // Top bar pills (left to right): QUIT, ?HELP, FOLLOW, recenter target, RESET
-    const topW = isNarrow ? 60 : 72;
+    // Top bar pills: QUIT (left), WARP next to it. Right-aligned: FOLLOW,
+    // RECENTER, RESET.
+    const topW = isNarrow ? 56 : 72;
     const topH = 40;
     const gap = 6;
     let tx = pad;
     this.rects.quit = { x: tx, y: pad, w: topW, h: topH };
     tx += topW + gap;
-    this.rects.help = { x: tx, y: pad, w: topH, h: topH };
-    // FOLLOW + RECENTER + RESET right-aligned.
+    this.rects.warp = { x: tx, y: pad, w: topW, h: topH };
     let rx = vw - pad;
     rx -= topW;
     this.rects.reset = { x: rx, y: pad, w: topW, h: topH };
@@ -145,14 +145,14 @@ export class Input {
       reset: this.state.resetPressed,
       recenter: this.state.recenterPressed,
       followToggle: this.state.followTogglePressed,
-      help: this.state.helpPressed,
+      warpCycle: this.state.warpCyclePressed,
       quit: this.state.quitPressed,
     };
     this.state.stagePressed = false;
     this.state.resetPressed = false;
     this.state.recenterPressed = false;
     this.state.followTogglePressed = false;
-    this.state.helpPressed = false;
+    this.state.warpCyclePressed = false;
     this.state.quitPressed = false;
     return out;
   }
@@ -195,7 +195,8 @@ export class Input {
       return void (this.state.recenterPressed = true);
     if (r.follow && this.hit(r.follow, x, y))
       return void (this.state.followTogglePressed = true);
-    if (r.help && this.hit(r.help, x, y)) return void (this.state.helpPressed = true);
+    if (r.warp && this.hit(r.warp, x, y))
+      return void (this.state.warpCyclePressed = true);
     if (r.quit && this.hit(r.quit, x, y)) return void (this.state.quitPressed = true);
     if (r.prograde && this.hit(r.prograde, x, y)) {
       this.state.headingMode = this.state.headingMode === "prograde" ? "manual" : "prograde";
@@ -300,8 +301,8 @@ export class Input {
     else if (e.key === "r" || e.key === "R") this.state.resetPressed = true;
     else if (e.key === "f" || e.key === "F") this.state.followTogglePressed = true;
     else if (e.key === "c" || e.key === "C") this.state.recenterPressed = true;
-    else if (e.key === "?" || e.key === "/" || e.key === "h" || e.key === "H")
-      this.state.helpPressed = true;
+    else if (e.key === "." || e.key === ">" || e.key === "t" || e.key === "T")
+      this.state.warpCyclePressed = true;
     else if (e.key === "q" || e.key === "Q" || e.key === "Escape")
       this.state.quitPressed = true;
     else if (e.key === "p" || e.key === "P")
