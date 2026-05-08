@@ -10,6 +10,39 @@ mobile or desktop browser.
 The site is built with a relative base path, so the same bundle also works at
 the repo root or under any custom domain without rebuilding.
 
+### One-time setup (the page returns 403 until you do this)
+
+GitHub Pages is **off by default** on every repo. The deploy workflow can't
+publish anything until you turn it on. Pick **one** of the two options below.
+
+**Option A — Source: GitHub Actions (recommended).**
+
+1. Open https://github.com/Gregtom3/get-into-orbit/settings/pages
+2. Under **Build and deployment** → **Source**, choose **GitHub Actions**.
+3. Push any commit to `main` (or click **Run workflow** on the
+   [Deploy prototype to GitHub Pages](https://github.com/Gregtom3/get-into-orbit/actions/workflows/pages.yml)
+   action). The site appears at https://gregtom3.github.io/get-into-orbit/
+   when the run finishes.
+
+**Option B — Source: Deploy from a branch (fallback).**
+
+Use this if option A fails (e.g. private-repo restrictions).
+
+1. Run the
+   [Deploy to gh-pages branch (fallback)](https://github.com/Gregtom3/get-into-orbit/actions/workflows/gh-pages-branch.yml)
+   workflow once via **Run workflow**. It builds and pushes `dist/` to a
+   `gh-pages` branch.
+2. Open https://github.com/Gregtom3/get-into-orbit/settings/pages
+3. Under **Source**, choose **Deploy from a branch** → branch `gh-pages`,
+   folder `/ (root)`. Save.
+
+### Verifying the deploy
+
+- Workflow runs: https://github.com/Gregtom3/get-into-orbit/actions
+- The `Deploy prototype to GitHub Pages` run prints the live URL on success.
+- A `404` after a successful run usually means caching — try a hard refresh.
+- A `403` always means Pages itself is not enabled yet (do option A or B).
+
 ### Quick links
 
 Skip the menu and jump straight into a tuned scenario:
